@@ -21,6 +21,7 @@ pub struct Colors {
     pub transparent_background_colors: bool,
     pub draw_bold_text_with_bright_colors: bool,
     footer_bar: BarColors,
+    pub tab_bar: TabBarColors,
 }
 
 impl Colors {
@@ -159,6 +160,21 @@ impl Default for MatchColors {
             foreground: CellRgb::Rgb(Rgb::new(0x18, 0x18, 0x18)),
         }
     }
+}
+
+/// Overrides for the tab bar colors, unset values are derived from the primary colors.
+#[derive(ConfigDeserialize, Serialize, Debug, Copy, Clone, Default, PartialEq, Eq)]
+pub struct TabBarColors {
+    pub background: Option<Rgb>,
+    pub active_background: Option<Rgb>,
+    pub inactive_background: Option<Rgb>,
+    pub hover_background: Option<Rgb>,
+    pub close_hover_background: Option<Rgb>,
+    pub active_foreground: Option<Rgb>,
+    pub inactive_foreground: Option<Rgb>,
+    pub hint_foreground: Option<Rgb>,
+    pub accent: Option<Rgb>,
+    pub separator: Option<Rgb>,
 }
 
 #[derive(ConfigDeserialize, Serialize, Debug, Copy, Clone, Default, PartialEq, Eq)]

@@ -444,7 +444,7 @@ impl WindowContext {
             master_fd: self.master_fd,
             #[cfg(not(windows))]
             shell_pid: self.shell_pid,
-            preserve_title: self.preserve_title,
+            preserve_title: &mut self.preserve_title,
             config: &self.config,
             event_proxy,
             #[cfg(target_os = "macos")]

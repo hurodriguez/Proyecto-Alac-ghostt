@@ -75,6 +75,12 @@ pub struct UiConfig {
     /// RGB values for colors.
     pub colors: Colors,
 
+    /// File explorer panel configuration.
+    pub explorer: crate::config::explorer::Explorer,
+
+    /// Tab bar layout configuration.
+    pub tab_bar: crate::config::tab_bar::TabBar,
+
     /// Path where config was loaded from.
     #[config(skip)]
     #[serde(skip_serializing)]

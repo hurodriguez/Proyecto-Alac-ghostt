@@ -64,6 +64,9 @@ objc2-foundation = { version = "0.3.1", default-features = false, features = [
     "NSString",
     "NSLocale",
     "NSUserDefaults",
+    "NSURL",
+    "NSArray",
+    "NSGeometry",
 ] }
 objc2-app-kit = { version = "0.3.1", default-features = false, features = [
     "std",
@@ -71,6 +74,21 @@ objc2-app-kit = { version = "0.3.1", default-features = false, features = [
     "NSResponder",
     "NSView",
     "NSWindow",
+    "NSApplication",
+    "NSMenu",
+    "NSMenuItem",
+    "NSPanel",
+    "NSSavePanel",
+    "NSOpenPanel",
+    "NSControl",
+    "NSGraphics",
+    "NSWindowTabGroup",
+    "NSAlert",
+    "NSEvent",
+    "NSButton",
+    "NSTextField",
+    "NSText",
+    "NSTextView",
 ] }
 
 [target.'cfg(windows)'.dependencies]

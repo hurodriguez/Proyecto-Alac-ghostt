@@ -331,11 +331,19 @@ impl Renderer {
     pub fn set_viewport(&self, size: &SizeInfo) {
         unsafe {
             gl::Viewport(
-                size.padding_x() as i32,
+                size.padding_left() as i32,
                 size.padding_y() as i32,
-                size.width() as i32 - 2 * size.padding_x() as i32,
-                size.height() as i32 - 2 * size.padding_y() as i32,
+                size.width() as i32 - size.padding_left() as i32 - size.padding_x() as i32,
+                size.height() as i32 - size.padding_y() as i32 - size.padding_top() as i32,
             );
+        }
+    }
+
+    /// Update the text projection without touching the viewport.
+    pub fn set_text_projection(&self, size_info: &SizeInfo) {
+        match &self.text_renderer {
+            TextRendererProvider::Gles2(renderer) => renderer.resize(size_info),
+            TextRendererProvider::Glsl3(renderer) => renderer.resize(size_info),
         }
     }
 

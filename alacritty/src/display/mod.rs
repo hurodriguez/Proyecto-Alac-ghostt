@@ -66,6 +66,10 @@ pub mod window;
 mod bell;
 mod damage;
 mod meter;
+#[cfg(target_os = "macos")]
+pub mod file_explorer;
+#[cfg(target_os = "macos")]
+pub mod tab_bar;
 
 /// Label for the forward terminal search bar.
 const FORWARD_SEARCH_LABEL: &str = "Search: ";
@@ -161,6 +165,12 @@ pub struct SizeInfo<T = f32> {
     /// Vertical window padding.
     padding_y: T,
 
+    /// Space above the first terminal line, padding included (tab bar lives here).
+    padding_top: T,
+
+    /// Space left of the first terminal column, padding included (file explorer lives here).
+    padding_left: T,
+
     /// Number of lines in the viewport.
     screen_lines: usize,
 
@@ -177,6 +187,8 @@ impl From<SizeInfo<f32>> for SizeInfo<u32> {
             cell_height: size_info.cell_height as u32,
             padding_x: size_info.padding_x as u32,
             padding_y: size_info.padding_y as u32,
+            padding_top: size_info.padding_top as u32,
+            padding_left: size_info.padding_left as u32,
             screen_lines: size_info.screen_lines,
             columns: size_info.columns,
         }
@@ -224,6 +236,18 @@ impl<T: Clone + Copy> SizeInfo<T> {
     pub fn padding_y(&self) -> T {
         self.padding_y
     }
+
+    /// Space between the window's top edge and the first terminal line.
+    #[inline]
+    pub fn padding_top(&self) -> T {
+        self.padding_top
+    }
+
+    /// Space between the window's left edge and the first terminal column.
+    #[inline]
+    pub fn padding_left(&self) -> T {
+        self.padding_left
+    }
 }
 
 impl SizeInfo<f32> {
@@ -255,9 +279,25 @@ impl SizeInfo<f32> {
             cell_height,
             padding_x: padding_x.floor(),
             padding_y: padding_y.floor(),
+            padding_top: padding_y.floor(),
+            padding_left: padding_x.floor(),
             screen_lines,
             columns,
         }
+    }
+
+    /// Reserve `offset` pixels above the terminal grid, and shrink the grid accordingly.
+    pub fn set_top_offset(&mut self, offset: f32) {
+        self.padding_top = self.padding_y + offset.floor();
+        let lines = (self.height - self.padding_y - self.padding_top) / self.cell_height;
+        self.screen_lines = cmp::max(lines as usize, MIN_SCREEN_LINES);
+    }
+
+    /// Reserve `offset` pixels left of the terminal grid, and shrink the grid accordingly.
+    pub fn set_left_offset(&mut self, offset: f32) {
+        self.padding_left = self.padding_x + offset.floor();
+        let columns = (self.width - self.padding_left - self.padding_x) / self.cell_width;
+        self.columns = cmp::max(columns as usize, MIN_COLUMNS);
     }
 
     #[inline]
@@ -270,10 +310,10 @@ impl SizeInfo<f32> {
     /// The padding, message bar or search are not counted as part of the grid.
     #[inline]
     pub fn contains_point(&self, x: usize, y: usize) -> bool {
-        x <= (self.padding_x + self.columns as f32 * self.cell_width) as usize
-            && x > self.padding_x as usize
-            && y <= (self.padding_y + self.screen_lines as f32 * self.cell_height) as usize
-            && y > self.padding_y as usize
+        x <= (self.padding_left + self.columns as f32 * self.cell_width) as usize
+            && x > self.padding_left as usize
+            && y <= (self.padding_top + self.screen_lines as f32 * self.cell_height) as usize
+            && y > self.padding_top as usize
     }
 
     /// Calculate padding to spread it evenly around the terminal content.
@@ -355,6 +395,14 @@ pub struct Display {
     vi_highlighted_hint_age: usize,
 
     pub raw_window_handle: RawWindowHandle,
+
+    /// Custom tab bar state.
+    #[cfg(target_os = "macos")]
+    tab_bar: tab_bar::TabBar,
+
+    /// File explorer panel state.
+    #[cfg(target_os = "macos")]
+    explorer: file_explorer::FileExplorer,
 
     /// UI cursor visibility for blinking.
     pub cursor_hidden: bool,
@@ -487,6 +535,13 @@ impl Display {
             window.set_resize_increments(PhysicalSize::new(cell_width, cell_height));
         }
 
+        // Windows with a transparent title bar don't get an automatic tab group, so the tab has
+        // to be attached explicitly while the key window is still the one that spawned it.
+        #[cfg(target_os = "macos")]
+        if _tabbed {
+            crate::macos::tabs::attach_to_key_window(&raw_window_handle);
+        }
+
         window.set_visible(true);
 
         // Always focus new windows, even if no Alacritty window is currently focused.
@@ -523,6 +578,10 @@ impl Display {
             colors: List::from(&config.colors),
             frame_timer: FrameTimer::new(),
             raw_window_handle,
+            #[cfg(target_os = "macos")]
+            tab_bar: Default::default(),
+            #[cfg(target_os = "macos")]
+            explorer: Default::default(),
             damage_tracker,
             glyph_cache,
             hint_state,
@@ -698,6 +757,16 @@ impl Display {
             padding.1,
             config.window.dynamic_padding,
         );
+
+        // Reserve space for the tab bar above the grid.
+        #[cfg(target_os = "macos")]
+        {
+            use crate::config::window::Decorations;
+
+            self.set_tab_bar_always_visible(config.window.decorations == Decorations::Transparent);
+            new_size.set_top_offset(self.tab_bar_height());
+            new_size.set_left_offset(self.explorer_width_for(width, cell_width));
+        }
 
         // Update number of column/lines in the viewport.
         let search_active = search_state.history_index.is_some();
@@ -967,7 +1036,7 @@ impl Display {
 
             // Create a new rectangle for the background.
             let start_line = size_info.screen_lines() + search_offset;
-            let y = size_info.cell_height().mul_add(start_line as f32, size_info.padding_y());
+            let y = size_info.cell_height().mul_add(start_line as f32, size_info.padding_top());
 
             let bg = match message.ty() {
                 MessageType::Error => config.colors.normal.red,
@@ -1007,6 +1076,11 @@ impl Display {
             // Draw rectangles.
             self.renderer.draw_rects(&size_info, &metrics, rects);
         }
+
+        #[cfg(target_os = "macos")]
+        self.draw_tab_bar(config, &metrics);
+        #[cfg(target_os = "macos")]
+        self.draw_file_explorer(config, &metrics);
 
         self.draw_render_timer(config);
 
@@ -1051,6 +1125,13 @@ impl Display {
         self.damage_tracker.debug = config.debug.highlight_damage;
         self.visual_bell.update_config(&config.bell);
         self.colors = List::from(&config.colors);
+
+        // The panel width and listing rules may have changed.
+        #[cfg(target_os = "macos")]
+        if self.update_explorer_config(&config.explorer) {
+            self.pending_update.dirty = true;
+            self.explorer_redraw();
+        }
     }
 
     /// Update the mouse/vi mode cursor hint highlighting.

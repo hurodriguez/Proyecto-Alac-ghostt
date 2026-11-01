@@ -2,7 +2,9 @@ use objc2::runtime::AnyObject;
 use objc2_foundation::{NSDictionary, NSString, NSUserDefaults, ns_string};
 
 pub mod locale;
+pub mod menu;
 pub mod proc;
+pub mod tabs;
 
 pub fn disable_autofill() {
     unsafe {

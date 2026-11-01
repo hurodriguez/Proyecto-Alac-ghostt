@@ -214,6 +214,78 @@ dynamic_padding = _true_++
 opacity = _0.9_
 
 
+# EXPLORER
+
+This section documents the *[explorer]* table of the configuration, the file
+explorer panel of the macOS build. Toggle it with _Cmd+B_.
+
+*width* = _<integer>_
+
+	Panel width in columns.
+
+	Default: _28_
+
+*max_width_share* = _<float>_
+
+	Largest share of the window the panel may take, from _0.1_ to _0.9_.
+
+	Default: _0.4_
+
+*show_hidden* = _true_ | _false_
+
+	List entries starting with a dot.
+
+	Default: _false_
+
+*max_entries* = _<integer>_
+
+	Entries kept per directory, limited to _5000_ to bound memory.
+
+	Default: _1000_
+
+*refresh_ms* = _<integer>_
+
+	Interval in milliseconds at which the panel follows the terminal's
+	directory while visible, _0_ disables the polling.
+
+	Default: _1000_
+
+*ignore* = [_"<string>"_,]
+
+	Entry names which are never listed, for example _"node_modules"_.
+
+	Default: _[]_
+
+*editor* = _"<string>"_
+
+	Command used to open files from the panel, the file is passed as _$1_.
+	Empty uses _$EDITOR_, then _micro_, then _vi_.
+
+	Default: _""_
+
+# TAB BAR
+
+This section documents the *[tab_bar]* table of the configuration, the layout
+of the macOS tab bar. Its colors are set in _colors.tab_bar_.
+
+*min_width* = _<integer>_
+
+	Narrowest a tab gets, in columns.
+
+	Default: _8_
+
+*max_width* = _<integer>_
+
+	Widest a tab gets, in columns.
+
+	Default: _28_
+
+*show_close_button* = _true_ | _false_
+
+	Draw the button closing a tab.
+
+	Default: _true_
+
 # SCROLLING
 
 This section documents the *[scrolling]* table of the configuration file.
@@ -395,6 +467,13 @@ Colors are specified using their hexadecimal values with a _#_ prefix: _#RRGGBB_
 	hyperlink URI preview, etc.
 
 	Default: { foreground = _"#181818"_, background = _"#d8d8d8"_ }
+
+*tab_bar* = { background = _"<string>"_, active_background = _"<string>"_, inactive_background = _"<string>"_, hover_background = _"<string>"_, close_hover_background = _"<string>"_, active_foreground = _"<string>"_, inactive_foreground = _"<string>"_, hint_foreground = _"<string>"_, accent = _"<string>"_, separator = _"<string>"_ }
+
+	Colors used for the macOS tab bar. Every field is optional, unset ones are
+	derived from the primary colors.
+
+	Default: _"None"_
 
 *selection* = { text = _"<string>"_, background = _"<string>"_ }
 
@@ -963,6 +1042,11 @@ _https://docs.rs/winit/latest/winit/keyboard/enum.Key.html#variant.Dead_
 			Hide all windows other than Alacritty.
 		*CreateNewTab*
 			Create new window in a tab.
+		*ToggleFileExplorer*
+			Show or hide the file explorer panel.
+		*RenameTab*
+			Rename the current tab, an empty title restores the terminal's title.
+			Also bound to a double click on a tab, and to the right click menu.
 		*SelectNextTab*
 			Select next tab.
 		*SelectPreviousTab*

@@ -83,6 +83,25 @@ pub trait ActionContext<T: EventListener> {
     fn write_to_pty<B: Into<Cow<'static, [u8]>>>(&self, _data: B) {}
     fn mark_dirty(&mut self) {}
     fn size_info(&self) -> SizeInfo;
+    /// Handle a click on the tab bar, returns `true` if the click was consumed.
+    fn tab_bar_click(&mut self, _button: MouseButton) -> bool {
+        false
+    }
+    /// Show or hide the file explorer.
+    fn toggle_file_explorer(&mut self) {}
+    fn rename_tab(&mut self) {}
+    /// Handle a click on the file explorer, returns `true` if the click was consumed.
+    fn explorer_click(&mut self) -> bool {
+        false
+    }
+    /// Update file explorer hover state for the current mouse position.
+    fn explorer_hover(&mut self, _inside: bool) {}
+    /// Scroll the file explorer when the mouse is over it, returns `true` if consumed.
+    fn explorer_scroll(&mut self, _lines: f32) -> bool {
+        false
+    }
+    /// Update tab bar hover state for the current mouse position.
+    fn tab_bar_hover(&mut self, _inside: bool) {}
     fn copy_selection(&mut self, _ty: ClipboardType) {}
     fn start_selection(&mut self, _ty: SelectionType, _point: Point, _side: Side) {}
     fn toggle_selection(&mut self, _ty: SelectionType, _point: Point, _side: Side) {}
@@ -407,6 +426,14 @@ impl<T: EventListener> Execute<T> for Action {
             Action::CreateNewWindow => ctx.create_new_window(),
             Action::SpawnNewInstance => ctx.spawn_new_instance(),
             #[cfg(target_os = "macos")]
+            #[cfg(target_os = "macos")]
+            Action::ToggleFileExplorer => ctx.toggle_file_explorer(),
+            #[cfg(not(target_os = "macos"))]
+            Action::ToggleFileExplorer => (),
+            #[cfg(target_os = "macos")]
+            Action::RenameTab => ctx.rename_tab(),
+            #[cfg(not(target_os = "macos"))]
+            Action::RenameTab => (),
             Action::CreateNewWindow => ctx.create_new_window(None),
             #[cfg(target_os = "macos")]
             Action::CreateNewTab => {
@@ -469,6 +496,8 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
         let y = y.clamp(0, size_info.height() as i32 - 1) as usize;
         self.ctx.mouse_mut().x = x;
         self.ctx.mouse_mut().y = y;
+        self.ctx.tab_bar_hover(true);
+        self.ctx.explorer_hover(true);
 
         let inside_text_area = size_info.contains_point(x, y);
         let cell_side = self.cell_side(x);
@@ -521,11 +550,12 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
         let size_info = self.ctx.size_info();
 
         let cell_x =
-            x.saturating_sub(size_info.padding_x() as usize) % size_info.cell_width() as usize;
+            x.saturating_sub(size_info.padding_left() as usize) % size_info.cell_width() as usize;
         let half_cell_width = (size_info.cell_width() / 2.0) as usize;
 
         let additional_padding =
-            (size_info.width() - size_info.padding_x() * 2.) % size_info.cell_width();
+            (size_info.width() - size_info.padding_left() - size_info.padding_x())
+                % size_info.cell_width();
         let end_of_grid = size_info.width() - size_info.padding_x() - additional_padding;
 
         if cell_x > half_cell_width
@@ -723,6 +753,16 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
     }
 
     pub fn mouse_wheel_input(&mut self, delta: MouseScrollDelta, phase: TouchPhase) {
+        // Scrolling over the file explorer moves its list instead of the terminal.
+        let cell_height = self.ctx.size_info().cell_height();
+        let lines = match delta {
+            MouseScrollDelta::LineDelta(_, lines) => -lines,
+            MouseScrollDelta::PixelDelta(position) => -(position.y as f32) / cell_height,
+        };
+        if self.ctx.explorer_scroll(lines) {
+            return;
+        }
+
         let multiplier = self.ctx.config().scrolling.multiplier;
         match delta {
             MouseScrollDelta::LineDelta(columns, lines) => {
@@ -993,6 +1033,22 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
             _ => (),
         }
 
+        // Skip normal mouse events if the file explorer has been clicked.
+        if state == ElementState::Pressed
+            && button == MouseButton::Left
+            && self.ctx.explorer_click()
+        {
+            return;
+        }
+
+        // Skip normal mouse events if the tab bar has been clicked.
+        if state == ElementState::Pressed
+            && matches!(button, MouseButton::Left | MouseButton::Middle | MouseButton::Right)
+            && self.ctx.tab_bar_click(button)
+        {
+            return;
+        }
+
         // Skip normal mouse events if the message bar has been clicked.
         if self.message_bar_cursor_state() == Some(CursorIcon::Pointer)
             && state == ElementState::Pressed
@@ -1074,7 +1130,7 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
 
         // Calculate Y position of the end of the last terminal line.
         let size = self.ctx.size_info();
-        let terminal_end = size.padding_y() as usize
+        let terminal_end = size.padding_top() as usize
             + size.cell_height() as usize * (size.screen_lines() + search_height);
 
         let mouse = self.ctx.mouse();
@@ -1124,8 +1180,8 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
         let step = (SELECTION_SCROLLING_STEP * scale_factor) as i32;
 
         // Compute the height of the scrolling areas.
-        let end_top = max(min_height, size.padding_y() as i32);
-        let text_area_bottom = size.padding_y() + size.screen_lines() as f32 * size.cell_height();
+        let end_top = max(min_height, size.padding_top() as i32);
+        let text_area_bottom = size.padding_top() + size.screen_lines() as f32 * size.cell_height();
         let start_bottom = min(size.height() as i32 - min_height, text_area_bottom as i32);
 
         // Get distance from closest window boundary.

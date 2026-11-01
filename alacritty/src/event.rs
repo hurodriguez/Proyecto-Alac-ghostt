@@ -13,6 +13,8 @@ use std::fmt::Debug;
 use std::os::unix::io::RawFd;
 #[cfg(unix)]
 use std::os::unix::net::UnixStream;
+#[cfg(unix)]
+use std::path::Path;
 use std::path::PathBuf;
 use std::rc::Rc;
 #[cfg(unix)]
@@ -78,6 +80,11 @@ const MAX_SEARCH_HISTORY_SIZE: usize = 255;
 const TOUCH_ZOOM_FACTOR: f32 = 0.01;
 
 /// Cooldown between invocations of the bell command.
+/// Shell snippet picking the editor for files opened from the explorer: `$EDITOR` when set,
+/// otherwise `micro` when installed, otherwise `vi`.
+#[cfg(target_os = "macos")]
+const EDITOR_SCRIPT: &str = r#"ed="${EDITOR:-}"; if [ -z "$ed" ]; then if command -v micro >/dev/null 2>&1; then ed=micro; else ed=vi; fi; fi; exec "$ed" "$1""#;
+
 const BELL_CMD_COOLDOWN: Duration = Duration::from_millis(100);
 
 /// The event processor.
@@ -98,6 +105,9 @@ pub struct Processor {
     global_ipc_options: ParsedOptions,
     cli_options: CliOptions,
     config: Rc<UiConfig>,
+    /// Tabs may have changed since the tab bars were last refreshed.
+    #[cfg(target_os = "macos")]
+    tabs_dirty: bool,
 }
 
 impl Processor {
@@ -141,6 +151,8 @@ impl Processor {
             #[cfg(unix)]
             global_ipc_options: Default::default(),
             config_monitor,
+            #[cfg(target_os = "macos")]
+            tabs_dirty: true,
         }
     }
 
@@ -235,6 +247,17 @@ impl ApplicationHandler<Event> for Processor {
             return;
         }
 
+        #[cfg(target_os = "macos")]
+        {
+            // The file actually loaded, falling back to the default location.
+            let config_path = self.config.config_paths.first().cloned().unwrap_or_else(|| {
+                crate::config::installed_config("toml").unwrap_or_else(|| {
+                    home::home_dir().unwrap_or_default().join(".config/alacritty/alacritty.toml")
+                })
+            });
+            crate::macos::menu::install(self.proxy.clone(), config_path);
+        }
+
         if let Some(window_options) = self.initial_window_options.take() {
             if let Err(err) = self.create_initial_window(event_loop, window_options) {
                 self.initial_window_error = Some(err);
@@ -254,6 +277,12 @@ impl ApplicationHandler<Event> for Processor {
     ) {
         if self.config.debug.print_events {
             info!(target: LOG_TARGET_WINIT, "{event:?}");
+        }
+
+        // Focus changes cover selecting, opening and moving between tabs.
+        #[cfg(target_os = "macos")]
+        if matches!(event, WindowEvent::Focused(_) | WindowEvent::CloseRequested) {
+            self.tabs_dirty = true;
         }
 
         // Ignore all events we do not care about.
@@ -285,6 +314,19 @@ impl ApplicationHandler<Event> for Processor {
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: Event) {
         if self.config.debug.print_events {
             info!(target: LOG_TARGET_WINIT, "{event:?}");
+        }
+
+        // Windows coming and going, or retitled, change what the tab bars show.
+        #[cfg(target_os = "macos")]
+        if matches!(
+            event.payload,
+            EventType::CreateWindow(_)
+                | EventType::CloseTab(_)
+                | EventType::Terminal(
+                    TerminalEvent::Title(_) | TerminalEvent::ResetTitle | TerminalEvent::Exit
+                )
+        ) {
+            self.tabs_dirty = true;
         }
 
         // Handle events which don't mandate the WindowId.
@@ -367,6 +409,45 @@ impl ApplicationHandler<Event> for Processor {
                     for window_context in self.windows.values_mut() {
                         window_context.update_config(self.config.clone());
                     }
+                }
+            },
+            // Close a tab picked on the tab bar, going through the regular terminal exit.
+            #[cfg(target_os = "macos")]
+            (EventType::CloseTab(target), _) => {
+                let found = self.windows.iter_mut().find(|(_, context)| {
+                    crate::macos::tabs::window_id(&context.display.raw_window_handle)
+                        == Some(target)
+                });
+                match found {
+                    Some((window_id, context)) => {
+                        context.display.window.hold = false;
+                        let event = Event::new(EventType::Terminal(TerminalEvent::Exit), *window_id);
+                        let _ = self.proxy.send_event(event);
+                    },
+                    None => log::warn!("No window found for the tab to close"),
+                }
+            },
+            // Forward the explorer toggle from the menu to the focused window.
+            #[cfg(target_os = "macos")]
+            (EventType::ToggleExplorer(Some(target)), None) => {
+                let window_id = self.windows.iter().find_map(|(window_id, context)| {
+                    let id = crate::macos::tabs::window_id(&context.display.raw_window_handle);
+                    (id == Some(target)).then_some(*window_id)
+                });
+                if let Some(window_id) = window_id {
+                    let event = Event::new(EventType::ToggleExplorer(None), window_id);
+                    let _ = self.proxy.send_event(event);
+                }
+            },
+            #[cfg(target_os = "macos")]
+            (EventType::RenameTab(Some(target)), None) => {
+                let window_id = self.windows.iter().find_map(|(window_id, context)| {
+                    let id = crate::macos::tabs::window_id(&context.display.raw_window_handle);
+                    (id == Some(target)).then_some(*window_id)
+                });
+                if let Some(window_id) = window_id {
+                    let event = Event::new(EventType::RenameTab(None), window_id);
+                    let _ = self.proxy.send_event(event);
                 }
             },
             // Create a new terminal window.
@@ -480,6 +561,15 @@ impl ApplicationHandler<Event> for Processor {
             );
         }
 
+        // Keep the tab bars in sync with the native tab groups.
+        #[cfg(target_os = "macos")]
+        if self.tabs_dirty && !self.windows.is_empty() {
+            self.tabs_dirty = false;
+            for window_context in self.windows.values_mut() {
+                window_context.display.sync_tabs();
+            }
+        }
+
         // Update the scheduler after event processing to ensure
         // the event loop deadline is as accurate as possible.
         let control_flow = match self.scheduler.update() {
@@ -546,6 +636,20 @@ pub enum EventType {
     Message(Message),
     Scroll(Scroll),
     CreateWindow(WindowOptions),
+    /// Close the tab whose native window has this identifier.
+    #[cfg(target_os = "macos")]
+    CloseTab(usize),
+    /// Toggle the file explorer of a window: the menu knows the native window, the processor
+    /// resolves it and forwards the event to that window.
+    #[cfg(target_os = "macos")]
+    ToggleExplorer(Option<usize>),
+    /// Rename the tab whose native window has this identifier: the processor resolves it and
+    /// forwards the event with `None` to that window.
+    #[cfg(target_os = "macos")]
+    RenameTab(Option<usize>),
+    /// Follow the terminal's directory in the file explorer.
+    #[cfg(target_os = "macos")]
+    ExplorerRefresh,
     #[cfg(unix)]
     IpcConfig(IpcConfig),
     #[cfg(unix)]
@@ -680,7 +784,7 @@ pub struct ActionContext<'a, N, T> {
     pub inline_search_state: &'a mut InlineSearchState,
     pub dirty: &'a mut bool,
     pub occluded: &'a mut bool,
-    pub preserve_title: bool,
+    pub preserve_title: &'a mut bool,
     #[cfg(not(windows))]
     pub master_fd: RawFd,
     #[cfg(not(windows))]
@@ -699,7 +803,171 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
         *self.dirty = true;
     }
 
+    /// Ask for a new title of this tab, an empty one goes back to the terminal's title.
+    #[cfg(target_os = "macos")]
+    fn rename_tab(&mut self) {
+        let Some(title) = crate::macos::tabs::prompt_title(self.display.window.title()) else {
+            return;
+        };
+
+        if title.is_empty() {
+            *self.preserve_title = false;
+            self.display.window.set_title(self.config.window.identity.title.clone());
+        } else {
+            *self.preserve_title = true;
+            self.display.window.set_title(title);
+        }
+        *self.dirty = true;
+    }
+
+    #[cfg(target_os = "macos")]
+    fn toggle_file_explorer(&mut self) {
+        let cwd = foreground_process_path(self.master_fd, self.shell_pid).ok();
+        let window_id = self.display.window.id();
+        let timer_id = TimerId::new(Topic::ExplorerRefresh, window_id);
+
+        // Only poll the directory while the panel is on screen.
+        if self.display.toggle_explorer(cwd, &self.config.explorer) {
+            let event = Event::new(EventType::ExplorerRefresh, window_id);
+            if let Some(interval) = self.config.explorer.refresh_interval() {
+                self.scheduler.schedule(event, interval, true, timer_id);
+            }
+        } else {
+            self.scheduler.unschedule(timer_id);
+        }
+
+        *self.dirty = true;
+    }
+
+    #[cfg(target_os = "macos")]
+    fn explorer_hover(&mut self, inside: bool) {
+        if !self.display.explorer_visible() {
+            return;
+        }
+
+        let position = inside.then_some((self.mouse.x, self.mouse.y));
+        if self.display.set_explorer_hover(position) {
+            *self.dirty = true;
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn explorer_scroll(&mut self, lines: f32) -> bool {
+        if self.display.explorer_hit(self.mouse.x, self.mouse.y).is_none() {
+            return false;
+        }
+
+        self.display.explorer_scroll(lines);
+        *self.dirty = true;
+        true
+    }
+
+    #[cfg(target_os = "macos")]
+    fn explorer_click(&mut self) -> bool {
+        use crate::display::file_explorer::ExplorerHit;
+
+        let Some(hit) = self.display.explorer_hit(self.mouse.x, self.mouse.y) else {
+            return false;
+        };
+
+        let root = self.display.explorer().root().to_path_buf();
+        match hit {
+            Some(ExplorerHit::Header) => {
+                if let Some(cwd) = self.display.explorer_cwd() {
+                    self.display.explorer_open_dir(cwd, &self.config.explorer);
+                }
+            },
+            Some(ExplorerHit::Parent) => {
+                if let Some(parent) = root.parent() {
+                    self.display.explorer_open_dir(parent.to_path_buf(), &self.config.explorer);
+                }
+            },
+            Some(ExplorerHit::Entry(index)) => {
+                if let Some(entry) = self.display.explorer().entry(index).cloned() {
+                    let path = root.join(&entry.name);
+                    if entry.is_dir {
+                        self.display.explorer_open_dir(path, &self.config.explorer);
+                    } else {
+                        self.open_in_editor(&path);
+                    }
+                }
+            },
+            None => (),
+        }
+
+        *self.dirty = true;
+        true
+    }
+
+    #[cfg(target_os = "macos")]
+    fn tab_bar_hover(&mut self, inside: bool) {
+        let position = inside.then_some((self.mouse.x, self.mouse.y));
+        if self.display.set_tab_hover(position) {
+            *self.dirty = true;
+        }
+    }
+
     #[inline]
+    #[cfg(target_os = "macos")]
+    fn tab_bar_click(&mut self, button: winit::event::MouseButton) -> bool {
+        use crate::display::tab_bar::TabHit;
+        use winit::event::MouseButton;
+
+        let middle = button == MouseButton::Middle;
+
+        let Some(hit) = self.display.tab_bar_hit(self.mouse.x, self.mouse.y) else {
+            return false;
+        };
+
+        let handle = &self.display.raw_window_handle;
+        if button == MouseButton::Right {
+            use crate::macos::tabs::TabMenuChoice;
+
+            if let Some(TabHit::Tab(index) | TabHit::Close(index)) = hit {
+                match crate::macos::tabs::context_menu() {
+                    Some(TabMenuChoice::Close) => self.close_tab(index),
+                    Some(TabMenuChoice::Rename) => {
+                        let target = crate::macos::tabs::tab_id(handle, index);
+                        if target == crate::macos::tabs::window_id(handle) {
+                            self.rename_tab();
+                        } else {
+                            // Another tab's window owns the title, let it ask for it.
+                            crate::macos::tabs::select(handle, index);
+                            let _ = self
+                                .event_proxy
+                                .send_event(Event::new(EventType::RenameTab(target), None));
+                        }
+                    },
+                    None => (),
+                }
+            }
+            return true;
+        }
+
+        match hit {
+            Some(TabHit::Tab(index) | TabHit::Close(index)) if middle => {
+                self.close_tab(index);
+            },
+            Some(TabHit::Close(index)) => self.close_tab(index),
+            Some(TabHit::Tab(index)) => {
+                if crate::macos::tabs::is_double_click(index) {
+                    self.rename_tab();
+                } else {
+                    crate::macos::tabs::select(handle, index);
+                }
+            },
+            // Middle click on empty space or the plus button does nothing.
+            Some(TabHit::New) if middle => (),
+            Some(TabHit::New) => {
+                let tabbing_id = Some(self.display.window.tabbing_id());
+                self.create_new_window(tabbing_id);
+            },
+            None => (),
+        }
+
+        true
+    }
+
     fn size_info(&self) -> SizeInfo {
         self.display.size_info
     }
@@ -1704,6 +1972,66 @@ impl<'a, N: Notify + 'a, T: EventListener> ActionContext<'a, N, T> {
             self.mark_dirty();
         }
     }
+
+    /// Open `file` with `$EDITOR` in a new tab, defaulting to `micro` and then `vi`.
+    ///
+    /// Apps started from Finder don't inherit the shell environment, so the editor is looked up
+    /// through a login shell.
+    #[cfg(target_os = "macos")]
+    fn open_in_editor(&self, file: &Path) {
+        let shell = env::var("SHELL").unwrap_or_else(|_| String::from("/bin/zsh"));
+
+        let mut options = WindowOptions::default();
+        options.window_tabbing_id = Some(self.display.window.tabbing_id());
+        options.terminal_options.working_directory = file.parent().map(Path::to_path_buf);
+        options.terminal_options.command = vec![
+            shell,
+            String::from("-lic"),
+            if self.config.explorer.editor.is_empty() {
+                String::from(EDITOR_SCRIPT)
+            } else {
+                format!("exec {} \"$1\"", self.config.explorer.editor)
+            },
+            String::from("sh"),
+            file.to_string_lossy().into_owned(),
+        ];
+
+        let _ = self.event_proxy.send_event(Event::new(EventType::CreateWindow(options), None));
+    }
+
+    /// Ask the owner of the tab at `index` to shut its terminal down.
+    #[cfg(target_os = "macos")]
+    fn close_tab(&self, index: usize) {
+        match crate::macos::tabs::tab_id(&self.display.raw_window_handle, index) {
+            Some(id) => {
+                let _ = self.event_proxy.send_event(Event::new(EventType::CloseTab(id), None));
+            },
+            None => log::warn!("Tab {index} to close does not exist"),
+        }
+    }
+
+    /// Change the shell's working directory to a directory dropped onto the window.
+    ///
+    /// Returns `false` when the terminal is in a state where a command must not be executed, so
+    /// the caller can fall back to pasting the path instead.
+    #[cfg(unix)]
+    fn open_dropped_directory(&mut self, path: &Path) -> bool {
+        // Don't run commands while searching or inside fullscreen applications.
+        if self.search_active()
+            || self.inline_search_state.char_pending
+            || self.terminal.mode().contains(TermMode::ALT_SCREEN)
+        {
+            return false;
+        }
+
+        // Escape the path for POSIX shells by wrapping it in single quotes.
+        let path = path.to_string_lossy().replace('\'', r"'\''");
+
+        self.on_terminal_input_start();
+        self.write_to_pty(format!("cd '{path}'\r").into_bytes());
+
+        true
+    }
 }
 
 /// Identified purpose of the touch input.
@@ -1808,10 +2136,11 @@ impl Mouse {
     /// coordinates will be clamped to the closest grid coordinates.
     #[inline]
     pub fn point(&self, size: &SizeInfo, display_offset: usize) -> Point {
-        let col = self.x.saturating_sub(size.padding_x() as usize) / (size.cell_width() as usize);
+        let col = self.x.saturating_sub(size.padding_left() as usize) / (size.cell_width() as usize);
         let col = min(Column(col), size.last_column());
 
-        let line = self.y.saturating_sub(size.padding_y() as usize) / (size.cell_height() as usize);
+        let line =
+            self.y.saturating_sub(size.padding_top() as usize) / (size.cell_height() as usize);
         let line = min(line, size.bottommost_line().0 as usize);
 
         term::viewport_to_point(display_offset, Point::new(line, col))
@@ -1866,13 +2195,13 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                 },
                 EventType::Terminal(event) => match event {
                     TerminalEvent::Title(title) => {
-                        if !self.ctx.preserve_title && self.ctx.config.window.dynamic_title {
+                        if !*self.ctx.preserve_title && self.ctx.config.window.dynamic_title {
                             self.ctx.window().set_title(title);
                         }
                     },
                     TerminalEvent::ResetTitle => {
                         let window_config = &self.ctx.config.window;
-                        if !self.ctx.preserve_title && window_config.dynamic_title {
+                        if !*self.ctx.preserve_title && window_config.dynamic_title {
                             self.ctx.display.window.set_title(window_config.identity.title.clone());
                         }
                     },
@@ -1934,6 +2263,25 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                 | EventType::ConfigReload(_)
                 | EventType::CreateWindow(_)
                 | EventType::Frame => (),
+                #[cfg(target_os = "macos")]
+                EventType::CloseTab(_) => (),
+                #[cfg(target_os = "macos")]
+                EventType::ToggleExplorer(_) => {
+                    use crate::input::ActionContext as _;
+                    self.ctx.toggle_file_explorer();
+                },
+                #[cfg(target_os = "macos")]
+                EventType::RenameTab(_) => {
+                    use crate::input::ActionContext as _;
+                    self.ctx.rename_tab();
+                },
+                #[cfg(target_os = "macos")]
+                EventType::ExplorerRefresh => {
+                    let cwd = foreground_process_path(self.ctx.master_fd, self.ctx.shell_pid).ok();
+                    if self.ctx.display.sync_explorer(cwd, &self.ctx.config.explorer) {
+                        *self.ctx.dirty = true;
+                    }
+                },
             },
             WinitEvent::WindowEvent { event, .. } => {
                 match event {
@@ -2005,11 +2353,25 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                         *self.ctx.occluded = occluded;
                     },
                     WindowEvent::DroppedFile(path) => {
+                        // Load dropped directories into the terminal instead of pasting them.
+                        #[cfg(unix)]
+                        {
+                            if path.is_dir() && self.ctx.open_dropped_directory(&path) {
+                                return;
+                            }
+                        }
+
                         let path: String = path.to_string_lossy().into();
                         self.ctx.paste(&(path + " "), true);
                     },
                     WindowEvent::CursorLeft { .. } => {
                         self.ctx.mouse.inside_text_area = false;
+                        #[cfg(target_os = "macos")]
+                        {
+                            use crate::input::ActionContext as _;
+                            self.ctx.tab_bar_hover(false);
+                            self.ctx.explorer_hover(false);
+                        }
 
                         if self.ctx.display().highlighted_hint.is_some() {
                             *self.ctx.dirty = true;

@@ -223,6 +223,12 @@ pub enum Action {
     /// Create new window in a tab.
     CreateNewTab,
 
+    /// Show or hide the file explorer panel.
+    ToggleFileExplorer,
+
+    /// Rename the current tab.
+    RenameTab,
+
     /// Toggle fullscreen.
     ToggleFullscreen,
 
@@ -583,6 +589,9 @@ pub fn platform_key_bindings() -> Vec<KeyBinding> {
         Insert, ModifiersState::SHIFT, ~BindingMode::VI, ~BindingMode::SEARCH; Action::Esc("\x1b[2;2~".into());
         // Tabbing api.
         "t",    ModifiersState::SUPER;                                         Action::CreateNewTab;
+        "t",    ModifiersState::CONTROL;                                       Action::CreateNewTab;
+        "b",    ModifiersState::SUPER;                                         Action::ToggleFileExplorer;
+        "r",    ModifiersState::SUPER | ModifiersState::SHIFT;                 Action::RenameTab;
         "]",    ModifiersState::SUPER | ModifiersState::SHIFT;                 Action::SelectNextTab;
         "[",    ModifiersState::SUPER | ModifiersState::SHIFT;                 Action::SelectPreviousTab;
         Tab,    ModifiersState::SUPER;                                         Action::SelectNextTab;
