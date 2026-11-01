@@ -46,6 +46,10 @@ Cargo workspace, 4 crates:
 
 Cargo features `x11`/`wayland` (default) only matter on Linux/BSD; `main.rs` fails compilation if none enabled on non-mac/non-Windows.
 
+## Engine boundary
+
+Keep the mods independent of the terminal engine so it could be swapped later (libghostty-vt is still alpha, no tagged release). `display/tab_bar.rs`, `display/file_explorer.rs`, `macos/*` and `config/{explorer,tab_bar}.rs` must not use `Term`, `Grid`, `Cell`, selection, search or `tty`. The only allowed import is `alacritty_terminal::index::{Column, Point}`, used as drawing coordinates for the renderer. Engine access belongs in the hooks in `event.rs`.
+
 ## Conventions
 
 - `rustfmt.toml` is strict (max-width heuristics, `imports_granularity = "Module"`, comment width 100) — run nightly fmt.
