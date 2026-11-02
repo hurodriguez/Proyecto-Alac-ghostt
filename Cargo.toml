@@ -1,9 +1,10 @@
 [workspace]
 members = [
-    "alacritty",
-    "alacritty_terminal",
-    "alacritty_config",
-    "alacritty_config_derive",
+    "alac",
+    "alac_terminal",
+    "ghostty_sys",
+    "alac_config",
+    "alac_config_derive",
 ]
 resolver = "2"
 
@@ -12,8 +13,12 @@ edition = "2024"
 rust-version = "1.85.0"
 
 [profile.release]
-lto = "thin"
-debug = 1
+lto = "fat"
+codegen-units = 1
+opt-level = "s"
+panic = "abort"
+strip = true
+debug = 0
 incremental = false
 
 [workspace.dependencies]

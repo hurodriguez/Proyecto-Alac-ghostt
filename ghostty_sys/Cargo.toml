@@ -1,0 +1,10 @@
+[package]
+name = "ghostty_sys"
+version = "0.1.0"
+description = "Raw bindings to libghostty-vt"
+edition.workspace = true
+rust-version.workspace = true
+build = "build.rs"
+
+[build-dependencies]
+bindgen = "0.71"

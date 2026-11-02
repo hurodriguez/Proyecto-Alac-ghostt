@@ -46,7 +46,7 @@ You can find the minimum supported Rust version in Alacritty's manifest file
 (`cat alacritty/Cargo.toml | grep "rust-version"`). Alacritty **must** always
 build with the MSRV and bumping it should be avoided if possible.
 
-Since `alacritty_terminal`'s version always tracks the next release, make sure that the version is
+Since `alac_terminal`'s version always tracks the next release, make sure that the version is
 bumped according to semver when necessary.
 
 ### Testing
@@ -91,8 +91,8 @@ If any change has been made to the `config.rs` file, it should also be documente
 
 Changes compared to the latest Alacritty release which have a direct effect on the user (opposed to
 things like code refactorings or documentation/tests) additionally need to be documented in the
-`CHANGELOG.md`. When a notable change is made to `alacritty_terminal`, it should be documented in
-`alacritty_terminal/CHANGELOG.md` as well. The existing entries should be used as a style guideline.
+`CHANGELOG.md`. When a notable change is made to `alac_terminal`, it should be documented in
+`alac_terminal/CHANGELOG.md` as well. The existing entries should be used as a style guideline.
 The change log should be used to document changes from a user-perspective, instead of explaining the
 technical background (like commit messages) More information about Alacritty's change log format can
 be found [here](https://keepachangelog.com).
@@ -151,9 +151,9 @@ The exact steps for an exemplary `0.2.3` release might look like this:
  5. Follow Steps 4-13 of the regular release's example
  6. The release's changelog is ported back to master, removing fixes from the `0.2.3` release
 
-The `alacritty_terminal` crate is released in synchronization with `alacritty`, keeping the `-dev`
+The `alac_terminal` crate is released in synchronization with `alacritty`, keeping the `-dev`
 and `-rcX` version suffix identical across the two crates. As soon as the new Alacritty stable
-release is made, releases are tagged as `alacritty_terminal_vX.Y.Z` and pushed to crates.io. During
+release is made, releases are tagged as `alac_terminal_vX.Y.Z` and pushed to crates.io. During
 a release, only the patch version is bumped on master, since there haven't been any changes since
 the last release yet.
 
