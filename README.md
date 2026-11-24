@@ -1,6 +1,3 @@
-<p align="center">
-    <img width="160" alt="Alac Logo" src="./extra/logo/alac.svg">
-</p>
 
 <h1 align="center">Alac</h1>
 
